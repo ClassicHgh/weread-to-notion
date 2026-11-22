@@ -10,7 +10,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:connection": "ts-node src/test-connection.ts",
     "test:config": "ts-node src/test-config.ts",
-    "test:author": "ts-node src/test-author-filter.ts"
+    "test:author": "ts-node src/test-author-filter.ts",
+    "migrate:covers": "ts-node src/migrate-covers.ts"
   },
   "keywords": [],
   "author": "",
