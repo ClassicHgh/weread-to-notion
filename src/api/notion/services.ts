@@ -342,6 +342,53 @@ export async function writeBookToNotion(
 }
 
 /**
+ * 用第一条划线的时间回填"开始阅读"字段
+ * 导入到微信读书的书没有 startReadingTime，导致该字段为空，
+ * 在按日期排序/筛选的视图里会看不到这些书。
+ * 仅当页面该字段为空时写入，避免覆盖用户手工填写的日期。
+ * @returns 是否实际执行了回填
+ */
+export async function backfillStartReadingFromHighlight(
+  apiKey: string,
+  pageId: string,
+  firstHighlightDate: string
+): Promise<boolean> {
+  try {
+    const headers = getNotionHeaders(apiKey, NOTION_VERSION);
+
+    // 先读取页面，避免覆盖已有的开始阅读时间
+    const pageResponse = await axios.get(
+      `${NOTION_API_BASE_URL}/pages/${pageId}`,
+      { headers }
+    );
+    const existingDate = pageResponse.data?.properties?.["开始阅读"]?.date;
+    if (existingDate && existingDate.start) {
+      console.log(`页面 ${pageId} 已有开始阅读时间 ${existingDate.start}，跳过回填`);
+      return false;
+    }
+
+    await axios.patch(
+      `${NOTION_API_BASE_URL}/pages/${pageId}`,
+      {
+        properties: {
+          开始阅读: { date: { start: firstHighlightDate } },
+        },
+      },
+      { headers }
+    );
+    console.log(`已用第一条划线时间回填"开始阅读": ${firstHighlightDate}`);
+    return true;
+  } catch (error: unknown) {
+    const axiosError = error as AxiosError;
+    console.error(`回填开始阅读失败:`, axiosError.message);
+    if (axiosError.response) {
+      console.error(`响应状态: ${axiosError.response.status}`);
+    }
+    return false;
+  }
+}
+
+/**
  * 将划线数据写入到Notion页面
  */
 export async function writeHighlightsToNotionPage(

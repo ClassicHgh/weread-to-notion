@@ -13,8 +13,30 @@ import {
   writeThoughtsToNotionPage,
   writeBookToNotion,
   checkBookExistsInNotion,
+  backfillStartReadingFromHighlight,
 } from "../../api/notion/services";
 import { getBookInfo } from "../../api/weread/services";
+
+/**
+ * 从划线数据里找出最早的一条划线日期（YYYY-MM-DD）
+ * highlights 按章节组织，每个章节下有 highlights 数组
+ */
+function getFirstHighlightDate(highlights: any[]): string | null {
+  let earliestMs: number | null = null;
+  for (const chapter of highlights) {
+    for (const h of chapter.highlights || []) {
+      const raw = h.created;
+      if (!raw) continue;
+      const ts = typeof raw === "number" ? raw : parseInt(raw, 10);
+      if (isNaN(ts)) continue;
+      // 与 client.ts 的判断一致：大于 9999999999 视为毫秒，否则秒
+      const ms = ts > 9999999999 ? ts : ts * 1000;
+      if (earliestMs === null || ms < earliestMs) earliestMs = ms;
+    }
+  }
+  if (earliestMs === null) return null;
+  return new Date(earliestMs).toISOString().split("T")[0];
+}
 
 /**
  * 同步书籍内容（划线和想法）到Notion
@@ -51,6 +73,35 @@ export async function syncBookContent(
     // 判断是否有更新
     const hasUpdates =
       hasHighlightUpdate || hasThoughtUpdate || !useIncremental;
+
+    // 回填"开始阅读"：导入到微信读书的书没有 startReadingTime，该字段为空，
+    // 会导致这些书在按日期排序/筛选的 Notion 视图里看不到。
+    // 用第一条（最早）划线的时间填充。回填函数内部会先读页面，
+    // 若已有日期则跳过，不会覆盖用户手工填写的值。
+    // 必须放在 hasUpdates 提前返回之前，否则没有新划线的书永远无法回填。
+    if (!bookInfo?.progressData?.startReadingTime) {
+      let backfillHighlights = highlights;
+      // 增量模式只返回新划线，拿不到最早那条，需全量拉取一次
+      if (useIncremental) {
+        const fullData = await getBookHighlightsFormatted(
+          cookie,
+          bookId,
+          false
+        );
+        backfillHighlights = fullData.highlights;
+      }
+      const firstDate = getFirstHighlightDate(backfillHighlights);
+      if (firstDate) {
+        console.log(
+          `《${bookInfo.title}》缺少开始阅读时间，尝试用第一条划线时间 ${firstDate} 回填`
+        );
+        await backfillStartReadingFromHighlight(
+          apiKey,
+          finalPageId,
+          firstDate
+        );
+      }
+    }
 
     if (!hasUpdates) {
       console.log(`《${bookInfo.title}》没有检测到新内容，跳过内容同步`);
