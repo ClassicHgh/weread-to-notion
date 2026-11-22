@@ -13,6 +13,7 @@ import {
   BookExistsResult,
   BookWriteResult,
 } from "./models";
+import { ensureBookCover } from "./cover-upload";
 
 /**
  * 检查Notion数据库是否包含所有必要的属性字段
@@ -159,6 +160,7 @@ export async function writeBookToNotion(
     );
     if (existCheck.exists && existCheck.pageId) {
       console.log(`书籍已存在，将使用现有页面: ${existCheck.pageId}`);
+      await ensureBookCover(apiKey, existCheck.pageId, bookData.cover || "");
       return { success: true, pageId: existCheck.pageId };
     }
 
@@ -321,6 +323,8 @@ export async function writeBookToNotion(
 
     console.log(`请求成功，响应状态码: ${response.status}`);
     console.log(`新创建页面ID: ${response.data.id}`);
+
+    await ensureBookCover(apiKey, response.data.id, bookData.cover || "");
 
     return { success: true, pageId: response.data.id };
   } catch (error: unknown) {
