@@ -19,21 +19,39 @@ import { getBookInfo } from "../../api/weread/services";
 
 /**
  * 从划线数据里找出最早的一条划线日期（YYYY-MM-DD）
- * highlights 按章节组织，每个章节下有 highlights 数组
+ * highlights 按章节组织，每个章节下有 highlights 数组。
+ * 划线时间字段可能是 created / createTime / createdTime，秒或毫秒，兼容处理。
  */
 function getFirstHighlightDate(highlights: any[]): string | null {
   let earliestMs: number | null = null;
+  let scanned = 0;
   for (const chapter of highlights) {
     for (const h of chapter.highlights || []) {
-      const raw = h.created;
-      if (!raw) continue;
-      const ts = typeof raw === "number" ? raw : parseInt(raw, 10);
-      if (isNaN(ts)) continue;
-      // 与 client.ts 的判断一致：大于 9999999999 视为毫秒，否则秒
+      scanned++;
+      // 微信读书不同接口/版本时间字段名不一致，全部尝试
+      const raw =
+        h.created ?? h.createTime ?? h.createdTime ?? h.time ?? null;
+      if (raw === null || raw === undefined || raw === "") continue;
+      // 若是 ISO 字符串，直接解析
+      if (typeof raw === "string" && raw.includes("-")) {
+        const parsed = Date.parse(raw);
+        if (!isNaN(parsed)) {
+          if (earliestMs === null || parsed < earliestMs) earliestMs = parsed;
+        }
+        continue;
+      }
+      const ts = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+      if (isNaN(ts) || ts <= 0) continue;
+      // 大于 9999999999 视为毫秒，否则秒
       const ms = ts > 9999999999 ? ts : ts * 1000;
       if (earliestMs === null || ms < earliestMs) earliestMs = ms;
     }
   }
+  console.log(
+    `  [回填诊断] 扫描 ${scanned} 条划线，最早时间戳=${
+      earliestMs === null ? "无" : new Date(earliestMs).toISOString()
+    }`
+  );
   if (earliestMs === null) return null;
   return new Date(earliestMs).toISOString().split("T")[0];
 }
@@ -76,31 +94,44 @@ export async function syncBookContent(
 
     // 回填"开始阅读"：导入到微信读书的书没有 startReadingTime，该字段为空，
     // 会导致这些书在按日期排序/筛选的 Notion 视图里看不到。
-    // 用第一条（最早）划线的时间填充。回填函数内部会先读页面，
-    // 若已有日期则跳过，不会覆盖用户手工填写的值。
+    // 用第一条（最早）划线的时间填充。是否写入由 backfillStartReadingFromHighlight
+    // 读取页面后决定：字段已有值（含手工填写）则跳过，为空才写入。
+    // 因此这里不再依赖 bookInfo.progressData 判断，任何书都尝试一次。
     // 必须放在 hasUpdates 提前返回之前，否则没有新划线的书永远无法回填。
-    if (!bookInfo?.progressData?.startReadingTime) {
-      let backfillHighlights = highlights;
-      // 增量模式只返回新划线，拿不到最早那条，需全量拉取一次
-      if (useIncremental) {
-        const fullData = await getBookHighlightsFormatted(
-          cookie,
-          bookId,
-          false
-        );
-        backfillHighlights = fullData.highlights;
-      }
-      const firstDate = getFirstHighlightDate(backfillHighlights);
-      if (firstDate) {
-        console.log(
-          `《${bookInfo.title}》缺少开始阅读时间，尝试用第一条划线时间 ${firstDate} 回填`
-        );
-        await backfillStartReadingFromHighlight(
-          apiKey,
-          finalPageId,
-          firstDate
-        );
-      }
+    console.log(
+      `\n[开始阅读回填] 《${bookInfo.title}》 progressData.startReadingTime=${
+        bookInfo?.progressData?.startReadingTime ?? "undefined"
+      }`
+    );
+    let backfillHighlights = highlights;
+    // 增量模式只返回新划线，拿不到最早那条，需全量拉取一次
+    if (useIncremental) {
+      const fullData = await getBookHighlightsFormatted(cookie, bookId, false);
+      backfillHighlights = fullData.highlights;
+      console.log(
+        `  [回填诊断] 增量模式下全量重拉划线，得到 ${
+          backfillHighlights.reduce(
+            (sum, ch) => sum + (ch.highlights?.length || 0),
+            0
+          )
+        } 条`
+      );
+    }
+    const firstDate = getFirstHighlightDate(backfillHighlights);
+    if (firstDate) {
+      console.log(
+        `  [开始阅读回填] 《${bookInfo.title}》最早划线日期=${firstDate}，尝试回填到页面 ${finalPageId}`
+      );
+      const ok = await backfillStartReadingFromHighlight(
+        apiKey,
+        finalPageId,
+        firstDate
+      );
+      console.log(`  [开始阅读回填] 结果=${ok ? "已写入" : "跳过或失败"}`);
+    } else {
+      console.log(
+        `  [开始阅读回填] 《${bookInfo.title}》未取到划线日期，跳过（无划线或时间字段异常）`
+      );
     }
 
     if (!hasUpdates) {
