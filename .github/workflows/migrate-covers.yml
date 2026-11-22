@@ -1,0 +1,29 @@
+name: Migrate Book Covers to Notion Native Files
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Migrate covers
+        run: |
+          npm ci
+          npm run migrate:covers
+        env:
+          NOTION_INTEGRATIONS: ${{ secrets.NOTION_INTEGRATIONS }}
+          DATABASE_ID: ${{ secrets.DATABASE_ID }}
+          NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
